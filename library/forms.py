@@ -39,12 +39,30 @@ class ReturnLoanForm(forms.Form):
 
 class IssueFindUserForm(forms.Form):
     selected_user = forms.ModelChoiceField(
-        queryset=User.objects.filter(groups__name='Library user')
+        queryset=User.objects.filter(groups__name='Library user').order_by('username')
         )
+
+
+def get_copies():
+    copy_choices = [(c.pk, str(c)) for c in Copy.objects.all() if c.available]
+    return copy_choices
+    # for province in ProvinceCode.objects.filter(country_code_id=1).order_by('code'):
+    #     province_choices.append((province.code, province.code))
+    # return province_choices
 
 class IssueToUserForm(forms.Form):
-    selected_copy = forms.ChoiceField(
-        choices=[(copy.pk, str(copy)) for copy in Copy.objects.all() if copy.available]
-        )
-
+    selected_copy = forms.ChoiceField(choices=get_copies)
     return_due = forms.DateField()
+
+class BookSearchForm(forms.Form):
+
+    q = forms.CharField(required=False)
+
+    order_choices =[
+        (1, "Author A-Z"), 
+        (2, "Author Z-A"), 
+        (3, "Title A-Z"),
+        (4, "Title Z-A"),
+        ]
+    order = forms.ChoiceField(choices=order_choices, label='Sort order', 
+        required=False, initial=3)

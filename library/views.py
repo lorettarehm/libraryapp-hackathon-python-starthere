@@ -1,7 +1,8 @@
 from django.contrib.auth.decorators import permission_required
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.contrib.auth.models import User
-from library.models import Configuration
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import render, get_object_or_404
 from django.urls import reverse, reverse_lazy
@@ -9,9 +10,23 @@ from django.views import generic
 from django.views.generic.edit import CreateView, UpdateView, DeleteView
 
 import datetime
+from functools import reduce
+import operator
 
+from library.forms import RenewLoanForm, ReturnLoanForm, IssueFindUserForm, IssueToUserForm, BookSearchForm
 from library.models import Book, Copy, Loan
-from library.forms import RenewLoanForm, ReturnLoanForm, IssueFindUserForm, IssueToUserForm
+from library.models import Configuration
+
+
+# import the logging library
+import logging
+
+# Get an instance of a logger
+logger = logging.getLogger(__name__)
+
+# Use by calling 
+# logger.warning('some message that is all one string')
+
 
 def index(request):
     """View function for home page of site."""
@@ -32,9 +47,82 @@ def index(request):
     # Render the HTML template index.html with the data in the context variable
     return render(request, 'index.html', context=context)
 
-class BookListView(generic.ListView):
-    model = Book
-    paginate_by = 10
+def book_list(request):
+    """View function for book search."""
+
+    # If the form is invalid, use these definitions of what to display
+    book_list = Book.objects.all()
+    order_term = 'title'
+    default_order = '3'
+
+    # Complex logic as this view can be accessed in three different ways: 
+    #   1. as the standard "all books" list ('q' not set, 'order' not set)
+    #   2. the result of s earch on the "all books" list ('q' set, 'order' set)
+    #   3. the result of a search from some other page ('q' set, 'order' not set)
+    # In case 1, we create an empty form.
+    # In case 3, we inlcude the default sort order in the form parameters
+    # In case 2, we use the form parameters as in the request.
+
+    if 'q' in request.GET:
+        # Result of some search, case 2 or 3 as above
+        form_fields = {'q': request.GET['q']}
+        if 'order' in request.GET:
+            # Case 2: use the given sort order
+            form_fields['order'] = request.GET['order']
+        else:
+            # Case 3: use the default sort order
+            form_fields['order'] = default_order
+        form = BookSearchForm(form_fields)
+    else:
+        # standard "all books" search, case 1 above
+        form = BookSearchForm()
+
+
+    if form.is_valid():
+
+        if 'q' in form.cleaned_data:
+            q = form.cleaned_data['q']
+            if q:
+                query_list = q.split()
+                book_list = Book.objects.filter(
+                    reduce(operator.and_,
+                        (Q(title__icontains=term) for term in query_list)) 
+                    |
+                    reduce(operator.and_,
+                        (Q(author__icontains=term) for term in query_list))
+                    )
+        
+        if 'order' in form.cleaned_data:
+            order = form.cleaned_data['order']
+            if order == "1":
+                order_term = 'author'
+            elif order == "2":
+                order_term = '-author'
+            elif order == "3":
+                order_term = 'title'
+            elif order == "4":
+                order_term = '-title'
+
+    page = request.GET.get('page', 1)
+    book_list = book_list.order_by(order_term)
+
+    paginator = Paginator(book_list, 10)
+    try:
+        books = paginator.page(page)
+    except PageNotAnInteger:
+        books = paginator.page(1)
+    except EmptyPage:
+        books = paginator.page(paginator.num_pages)
+
+    context = {
+        'book_search_form': form,
+        'book_list': books,
+        # is_a_search_result used to select the message displayed if book_list is empty
+        'is_a_search_result': form.is_valid(),
+        }
+
+    return render(request, 'library/book_list.html', context=context)
+
 
 class BookDetailView(generic.DetailView):
     model = Book
@@ -51,7 +139,7 @@ class BookUpdate(PermissionRequiredMixin, UpdateView):
 
 class BookDelete(PermissionRequiredMixin, DeleteView):
     model = Book
-    success_url = reverse_lazy('books')
+    success_url = reverse_lazy('book_list')
     permission_required = 'library.delete_book'
 
 class CopyCreate(PermissionRequiredMixin, CreateView):
@@ -66,8 +154,13 @@ class CopyUpdate(PermissionRequiredMixin, UpdateView):
 
 class CopyDelete(PermissionRequiredMixin, DeleteView):
     model = Copy
-    success_url = reverse_lazy('books')
     permission_required = 'library.delete_copy'
+    # success_url = reverse_lazy('book_list')
+    def get_success_url(self):
+        # logger.warning('copy delete args: ' + str(self.kwargs))
+        book_id = Copy.objects.get(pk=self.kwargs['pk']).book.id
+        # logger.warning('copy delete, loading book: ' + str(book_id))
+        return reverse_lazy('book_detail', kwargs={'pk': book_id}) # kwargs={'pk': self.kwargs['pk']})
 
 #class ConfigurationUpdate(PermissionRequiredMixin, UpdateView):
 #    model = Configuration
